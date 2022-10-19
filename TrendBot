@@ -1,0 +1,325 @@
+//+------------------------------------------------------------------+
+//|                                                FractalsTrend.mq5 |
+//|                        Copyright 2019, MetaQuotes Software Corp. |
+//|                                             https://www.mql5.com |
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2019, MetaQuotes Software Corp."
+#property link      "https://www.mql5.com"
+#property version   "1.00"
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+
+#include <Trade\PositionInfo.mqh>
+#include <Trade\Trade.mqh>
+#include <Trade\SymbolInfo.mqh>  
+#include <Trade\AccountInfo.mqh>
+#include <Trade\DealInfo.mqh>
+#include <Trade\OrderInfo.mqh>
+
+#include <ChartObjects\ChartObjectsFibo.mqh>
+
+input color Resistance_Color=Red;
+input ENUM_LINE_STYLE Resistance_Style;
+input int Resistance_Width=1;
+input color Support_Color=Red;
+input ENUM_LINE_STYLE Support_Style;
+input int Support_Width=1;
+
+CPositionInfo  m_position;                   // trade position object
+CTrade         m_trade;                      // trading object
+CSymbolInfo    m_symbol;                     // symbol info object
+CAccountInfo   m_account;                    // account info wrapper
+CDealInfo      m_deal;                       // deals object
+COrderInfo     m_order;  
+
+CChartObjectFiboExpansion fibo_expasion;
+
+// GLOBAL VARIABLES
+long                 pos_magic=0;         // Magic number
+string               pos_symbol="";       // Symbol
+string               pos_comment="";      // Comment
+double               pos_swap=0.0;        // Swap
+double               pos_commission=0.0;  // Commission
+double               pos_price=0.0;       // Current price of the position
+double               pos_cprice=0.0;      // Current price of the position
+double               pos_profit=0.0;      // Profit/Loss of the position
+double               pos_volume=0.0;      // Position volume
+datetime             pos_time=NULL;       // Position opening time
+long                 pos_id=0;            // Position identifier
+ENUM_POSITION_TYPE   pos_type=NULL;       // Position type
+//---
+
+double fupbuffer[];
+double flowbuffer[];
+int fhandle;
+int up_pos1,up_pos2,low_pos1,low_pos2;
+
+double stoploss, takeprofit;
+
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+//---
+   fhandle=iFractals(_Symbol,0);
+   
+    if(fhandle == INVALID_HANDLE){
+    Print("handle invalido");return 0;
+    }
+   
+   ArraySetAsSeries(flowbuffer,true);
+   ArraySetAsSeries(fupbuffer,true);
+//---
+   return(INIT_SUCCEEDED);
+  }
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+  {
+//---
+   ObjectDelete(0,"lta");
+   ObjectDelete(0,"ltb");
+
+  }
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+   //--apenas quando aparecer nova barra
+    static datetime PrevBars=0;
+   datetime time_0=iTime(m_symbol.Name(),Period(),0);
+   if(time_0==PrevBars)
+      return;
+   PrevBars=time_0;
+  
+  
+       
+   int i;
+   double up_price1[],up_price2[],low_price1[],low_price2[];
+   
+   ArrayResize(up_price1,1);
+   ArrayResize(up_price2,1);
+   ArrayResize(low_price1,1);
+   ArrayResize(low_price2,1);
+   
+
+///ZERANDO BOOLEANAS DE OTIMIZAÇÃO====================================================   
+
+//---COPIANDO OS BUFFERS==============================================================
+   if(CopyBuffer(fhandle,0,0,Bars(_Symbol,0),fupbuffer) == 0 ||
+   CopyBuffer(fhandle,1,0,Bars(_Symbol,0),flowbuffer) == 0){Print("erro no copybuffer");return;}
+
+/// ACHANDO FRACTAIS SUPERIORES ========================================================    
+   for(i=0;i<Bars(_Symbol,0); i++)
+     {
+      if(fupbuffer[i]!=EMPTY_VALUE)break;
+     }
+   up_price1[0]=fupbuffer[i];
+   up_pos1=i;
+
+   for(i=up_pos1+1;i<Bars(_Symbol,0); i++)
+     {
+      if(fupbuffer[i]!=EMPTY_VALUE)break;
+     }
+   up_price2[0]=fupbuffer[i];
+   up_pos2=i;
+/// ACHANDO FRACTAIS INFERIORES ========================================================  
+   for(i=0;i<Bars(_Symbol,0); i++)
+     {
+      if(flowbuffer[i]!=EMPTY_VALUE)break;
+     }
+   low_price1[0]=flowbuffer[i];
+   low_pos1=i;
+
+   for(i=low_pos1+1;i<Bars(_Symbol,0); i++)
+     {
+      if(flowbuffer[i]!=EMPTY_VALUE)break;
+     }
+   low_price2[0]=flowbuffer[i];
+   low_pos2=i;
+//// COPIANDO HORARIOS E DATAS=====================================================================  
+
+   datetime up_time1[],up_time2[],low_time1[],low_time2[];
+
+///DATAS E HORARIOS DOS FRACTAIS SUPERIORES====================================== 
+   if(CopyTime(_Symbol,0,up_pos1,1,up_time1) == -1 ||
+   CopyTime(_Symbol,0,up_pos2,1,up_time2) == -1 ||
+///DATAS E HORARIOS DOS FRACTAIS INFERIORES====================================== 
+   CopyTime(_Symbol,0,low_pos1,1,low_time1) == -1 ||
+   CopyTime(_Symbol,0,low_pos2,1,low_time2) == -1){
+    
+    Print("erro no copyTime");
+   
+   return;};
+
+   //Print("UP PTICE:  ",up_price1[0],"  UP PRICE 2:  ",up_price2[0],"  LOW PRICE:  ",low_price1[0],"  LOW PRICE 2:  ",low_price2[0]);
+   //Print("UP POS 1:  ",up_pos1,"  UP POS 2:  ",up_pos2,"  LOW POS 1:  ",low_pos1,"  LOW POS 2:  ",low_pos2);
+
+///CRIANDO LTA E LTB==================================================
+   if(up_price1[0]<up_price2[0])
+     {
+      
+      ObjectDelete(0,"ltb");
+     
+      ObjectCreate(0,"ltb",OBJ_TREND,0,up_time2[0],up_price2[0],up_time1[0],up_price1[0]);
+      ObjectSetInteger(0,"ltb",OBJPROP_RAY_RIGHT,true);
+      ObjectSetInteger(0,"ltb",OBJPROP_COLOR,Support_Color);
+      ObjectSetInteger(0,"ltb",OBJPROP_STYLE,Support_Style);
+      ObjectSetInteger(0,"ltb",OBJPROP_WIDTH,Support_Width);
+     }
+
+   if(low_price1[0]>low_price2[0])
+     {
+     
+      ObjectDelete(0,"lta");
+     
+      ObjectCreate(0,"lta",OBJ_TREND,0,low_time2[0],low_price2[0],low_time1[0],low_price1[0]);
+      ObjectSetInteger(0,"lta",OBJPROP_RAY_RIGHT,true);
+      ObjectSetInteger(0,"lta",OBJPROP_COLOR,Support_Color);
+      ObjectSetInteger(0,"lta",OBJPROP_STYLE,Support_Style);
+      ObjectSetInteger(0,"lta",OBJPROP_WIDTH,Support_Width);
+     }
+
+  
+  //achando preço atual da lta e ltb
+  datetime close_atual[];
+  double close[];
+    
+  CopyClose(_Symbol,0,0,10,close);
+  CopyTime(_Symbol,0,0,1,close_atual);
+  
+  double lta_price = ObjectGetValueByTime(0,"lta",close_atual[0],0);
+  double ltb_price = ObjectGetValueByTime(0,"ltb",close_atual[0],0);
+  
+  //Print(lta_price,ltb_price);
+  
+  //------------------------------------------------------------------------------------------------------
+  // -------------COMECAR FUNCAO DE COMPRA AGR Q O SINAL FUNCIONA-----------------------------------------
+  //------------------------------------------------------------------------------------------------------
+  
+ 
+  if(BuyReversingSignal(ltb_price, close)){
+           
+         CloseAllSellPosition();
+     
+  stoploss = low_price2[0];
+  takeprofit = up_price2[0];
+  pos_volume = 0.1;
+  
+  m_trade.Buy(pos_volume,_Symbol,0,stoploss,takeprofit);
+  };
+  
+  
+  if(SellReversingSignal(ltb_price, close)){
+  
+     CloseAllBuyPosition();
+      
+  stoploss = up_price2[0];
+  takeprofit = low_price2[0];
+  pos_volume = 0.1;
+  
+  m_trade.Buy(pos_volume,_Symbol,0,stoploss,takeprofit);
+  
+  
+  };
+ 
+   /*
+  if(SellWithTrendSignal(ltb_price, close)){
+  
+  stoploss = up_price2[0];
+  takeprofit = low_price1[0];
+  lot = 0.1;
+  
+  m_trade.Sell(lot,_Symbol,0,stoploss,takeprofit);
+  
+  
+  };
+   */
+//+------------------------------------------------------------------+
+}
+
+bool BuyReversingSignal(double ltb_price,double &close[]){
+        
+        if(close[0]>ltb_price){
+        Print("buy");
+        Print(close[0], "<< preço atual");
+        Print(close[1], "<< preço anterior");
+        
+        Print(ltb_price, "<< preço ltb");
+        return true;}
+        else{return false;}};
+        
+bool SellWithTrendSignal(double ltb_price,double &close[]){
+        if(close[0]>ltb_price){
+        Print("buy");
+        Print(close[0], "<< preço atual");
+        Print(close[1], "<< preço anterior");
+        
+        Print(ltb_price, "<< preço ltb");
+        return true;}
+        else{return false;}};     
+        
+bool SellReversingSignal(double lta_price,double &close[]){
+        if(close[0]<lta_price){
+        
+        Print("buy");
+        Print(close[0], "<< preço atual");
+        Print(close[1], "<< preço anterior");
+        
+        Print(lta_price, "<< preço ltb");
+        return true;}
+        else{return false;}};   
+        
+
+
+void GetPositionProperties()
+  {
+   pos_symbol     =PositionGetString(POSITION_SYMBOL);
+   pos_comment    =PositionGetString(POSITION_COMMENT);
+   pos_magic      =PositionGetInteger(POSITION_MAGIC);
+   pos_price      =PositionGetDouble(POSITION_PRICE_OPEN);
+   pos_cprice     =PositionGetDouble(POSITION_PRICE_CURRENT);
+   stoploss       =PositionGetDouble(POSITION_SL);
+   takeprofit     =PositionGetDouble(POSITION_TP);
+   pos_type       =(ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   pos_volume     =PositionGetDouble(POSITION_VOLUME);
+   pos_commission =PositionGetDouble(POSITION_COMMISSION);
+   pos_swap       =PositionGetDouble(POSITION_SWAP);
+   pos_profit     =PositionGetDouble(POSITION_PROFIT);
+   pos_time       =(datetime)PositionGetInteger(POSITION_TIME);
+   pos_id         =PositionGetInteger(POSITION_IDENTIFIER);
+  }
+  
+
+void CloseAllBuyPosition(){
+
+    for(int i = PositionsTotal()-1;i>0;i--){
+         
+           ulong ticket = PositionGetTicket(i);
+           
+           pos_type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+           
+           if(pos_type == POSITION_TYPE_BUY){
+           m_trade.PositionClose(ticket);
+           }
+           }}
+           
+void CloseAllSellPosition(){
+
+    for(int i = PositionsTotal()-1;i>0;i--){
+         
+           ulong ticket = PositionGetTicket(i);
+           
+           pos_type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+           
+           if(pos_type == POSITION_TYPE_SELL){
+           
+           m_trade.PositionClose(ticket);
+           }
+           }}
